@@ -1,0 +1,223 @@
+provider "aws" {
+  region = var.region
+}
+
+resource "aws_iam_role" "ec2_ssm_role" {
+  name = "ec2-ssm-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Principal = {
+          Service = "ec2.amazonaws.com"
+        }
+        Action = "sts:AssumeRole"
+      }
+    ]
+  })
+}
+
+
+resource "aws_iam_policy_attachment" "ssm_policy_attachment" {
+  name       = "ec2-ssm-policy-attachment"
+  roles      = [aws_iam_role.ec2_ssm_role.name]
+  policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
+}
+
+
+resource "aws_iam_policy" "custom_ec2_policy" {
+  name        = "ec2-custom-policy"
+  description = "Policy for EC2 to access ECR and CloudTrail"
+  policy      = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect   = "Allow"
+        Action   = [
+          "ecr:*",
+          "cloudtrail:LookupEvents"
+        ]
+        Resource = "*"
+      }
+    ]
+  })
+}
+
+resource "aws_security_group" "ssh_access" {
+  name        = "allow-ssh"
+  description = "Allow SSH inbound traffic"
+
+  ingress {
+    from_port   = 22
+    to_port     = 22
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = {
+    Name = "allow-ssh"
+  }
+}
+
+resource "aws_iam_policy_attachment" "custom_policy_attachment" {
+  name       = "ec2-custom-policy-attachment"
+  roles      = [aws_iam_role.ec2_ssm_role.name]
+  policy_arn = aws_iam_policy.custom_ec2_policy.arn
+}
+
+
+resource "aws_iam_instance_profile" "ec2_profile" {
+  name = "ec2-instance-profile"
+  role = aws_iam_role.ec2_ssm_role.name
+}
+
+
+resource "aws_instance" "ec2_instance" {
+  ami                  = "ami-088b41ffb0933423f"
+  instance_type        = "t2.micro"
+  iam_instance_profile = aws_iam_instance_profile.ec2_profile.name
+  key_name = "riplcode-first-test-keypair"
+  vpc_security_group_ids = [aws_security_group.ssh_access.id]
+
+  user_data = <<-EOF
+    #!/bin/bash
+    set -e
+
+    while ! id ssm-user &>/dev/null; do
+      echo "Waiting for ssm-user to be created..."
+      sleep 2
+    done
+
+    SOLVE_DIR="/home/ssm-user/solve"
+    mkdir -p "$SOLVE_DIR"
+    chown ssm-user:ssm-user "$SOLVE_DIR"
+    chmod 755 "$SOLVE_DIR"
+
+    sudo yum update -y
+
+    sudo yum -y install docker
+    sudo service docker start
+
+    sudo usermod -a -G docker ssm-user
+    sudo chmod 666 /var/run/docker.sock
+
+    # Install dependencies for Kafka
+    sudo yum install -y java-1.8.0-openjdk wget tar
+
+    # Download Kafka & Zookeeper inside /home/ssm-user/solve
+    KAFKA_VERSION="3.6.0"
+    SCALA_VERSION="2.13"
+    KAFKA_DIR="$SOLVE_DIR/kafka"
+    wget -q "https://archive.apache.org/dist/kafka/3.6.0/kafka_2.13-3.6.0.tgz" -O "$SOLVE_DIR/kafka.tgz"
+
+    # Extract Kafka
+    mkdir -p "$KAFKA_DIR"
+    tar -xzf "$SOLVE_DIR/kafka.tgz" --strip-components=1 -C "$KAFKA_DIR"
+    chown -R ssm-user:ssm-user "$KAFKA_DIR"
+
+
+
+    sudo -u ssm-user nohup $KAFKA_DIR/bin/zookeeper-server-start.sh $KAFKA_DIR/config/zookeeper.properties > $SOLVE_DIR/zookeeper.log 2>&1 &
+
+
+    sudo -u ssm-user nohup $KAFKA_DIR/bin/kafka-server-start.sh $KAFKA_DIR/config/server.properties > $SOLVE_DIR/kafka.log 2>&1 &
+
+
+  EOF
+
+  tags = {
+    Name = "Riplcode-SSM-Enabled-Instance-Test-2"
+  }
+}
+
+
+output "instance_id" {
+  value = aws_instance.ec2_instance.id
+}
+
+output "aws_region" {
+  value = var.region
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+provider "aws" {
+  region = var.region
+}
+
+resource "aws_iam_role" "ec2_ssm_role" {
+  name = "ec2-ssm-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Principal = {
+          Service = "ec2.amazonaws.com"
+        }
+        Action = "sts:AssumeRole"
+      }
+    ]
+  })
+}
+
+
+
+resource "aws_instance" "ec2_instance" {
+  ami                  = "ami-0db929b647d69d379"
+  instance_type        = "t2.micro"
+  user_data = <<-EOF
+    #!/bin/bash
+    KAFKA_DIR="/home/ssm-user/solve/kafka_2.13-3.6.0"
+    SOLVE_DIR="/home/ssm-user/solve"
+    sudo -u ssm-user nohup $KAFKA_DIR/bin/zookeeper-server-start.sh $KAFKA_DIR/config/zookeeper.properties > $SOLVE_DIR/zookeeper.log 2>&1 &
+    sudo -u ssm-user nohup $KAFKA_DIR/bin/kafka-server-start.sh $KAFKA_DIR/config/server.properties > $SOLVE_DIR/kafka.log 2>&1 &
+  EOF
+
+  tags = {
+    Name = "Riplcode-SSM-Enabled-Instance"
+  }
+}
+
+
+output "instance_id" {
+  value = aws_instance.ec2_instance.id
+}
+
+output "aws_region" {
+  value = var.region
+}
+
